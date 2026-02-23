@@ -409,6 +409,9 @@ typedef union {
   ghostty_platform_ios_s ios;
 } ghostty_platform_u;
 
+typedef void (*ghostty_stream_write_fn)(void* userdata, const uint8_t* data, size_t len);
+typedef void (*ghostty_stream_resize_fn)(void* userdata, uint16_t cols, uint16_t rows, uint16_t xpixel, uint16_t ypixel);
+
 typedef struct {
   ghostty_platform_e platform_tag;
   ghostty_platform_u platform;
@@ -421,6 +424,9 @@ typedef struct {
   size_t env_var_count;
   const char* initial_input;
   bool wait_after_command;
+  ghostty_stream_write_fn stream_write_fn;
+  ghostty_stream_resize_fn stream_resize_fn;
+  void* stream_userdata;
 } ghostty_surface_config_s;
 
 typedef struct {
@@ -951,6 +957,7 @@ bool ghostty_surface_key(ghostty_surface_t, ghostty_input_key_s);
 bool ghostty_surface_key_is_binding(ghostty_surface_t, ghostty_input_key_s);
 void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
 void ghostty_surface_preedit(ghostty_surface_t, const char*, uintptr_t);
+void ghostty_surface_write_output(ghostty_surface_t, const uint8_t*, uintptr_t);
 bool ghostty_surface_mouse_captured(ghostty_surface_t);
 bool ghostty_surface_mouse_button(ghostty_surface_t,
                                   ghostty_input_mouse_state_e,

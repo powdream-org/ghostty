@@ -18,6 +18,7 @@ const terminal = @import("../terminal/main.zig");
 const CoreApp = @import("../App.zig");
 const CoreInspector = @import("../inspector/main.zig").Inspector;
 const CoreSurface = @import("../Surface.zig");
+const termio = @import("../termio.zig");
 const configpkg = @import("../config.zig");
 const Config = configpkg.Config;
 
@@ -412,6 +413,11 @@ pub const Surface = struct {
     /// that getTitle works without the implementer needing to save it.
     title: ?[:0]const u8 = null,
 
+    /// Stream backend config (for iOS SSH mode).
+    stream_write_fn: ?*const fn (?*anyopaque, [*]const u8, usize) callconv(.c) void = null,
+    stream_resize_fn: ?*const fn (?*anyopaque, u16, u16, u16, u16) callconv(.c) void = null,
+    stream_userdata: ?*anyopaque = null,
+
     /// Surface initialization options.
     pub const Options = extern struct {
         /// The platform that this surface is being initialized for and
@@ -450,6 +456,12 @@ pub const Surface = struct {
 
         /// Wait after the command exits
         wait_after_command: bool = false,
+
+        /// Stream backend callbacks (for iOS SSH mode).
+        /// When write_fn is non-null, the Stream backend is used instead of Exec.
+        stream_write_fn: ?*const fn (?*anyopaque, [*]const u8, usize) callconv(.c) void = null,
+        stream_resize_fn: ?*const fn (?*anyopaque, u16, u16, u16, u16) callconv(.c) void = null,
+        stream_userdata: ?*anyopaque = null,
     };
 
     pub fn init(self: *Surface, app: *App, opts: Options) !void {
@@ -464,6 +476,9 @@ pub const Surface = struct {
             },
             .size = .{ .width = 800, .height = 600 },
             .cursor_pos = .{ .x = -1, .y = -1 },
+            .stream_write_fn = opts.stream_write_fn,
+            .stream_resize_fn = opts.stream_resize_fn,
+            .stream_userdata = opts.stream_userdata,
         };
 
         // Add ourselves to the list of surfaces on the app.
@@ -565,6 +580,17 @@ pub const Surface = struct {
             font_size.points = opts.font_size;
             try self.core_surface.setFontSize(font_size);
         }
+    }
+
+    /// Returns the stream backend config if stream callbacks are set.
+    /// Used by Surface.zig to decide which backend to create.
+    pub fn streamConfig(self: *const Surface) ?termio.Stream.Config {
+        const write_fn = self.stream_write_fn orelse return null;
+        return .{
+            .write_fn = write_fn,
+            .resize_fn = self.stream_resize_fn,
+            .userdata = self.stream_userdata,
+        };
     }
 
     pub fn deinit(self: *Surface) void {
@@ -1745,6 +1771,21 @@ pub const CAPI = struct {
         len: usize,
     ) void {
         surface.preeditCallback(if (len == 0) null else ptr[0..len]);
+    }
+
+    /// Feed raw output data into the terminal's VT parser. This is the
+    /// primary way to inject data from an external source (e.g. SSH) into
+    /// the terminal when using the stream backend. The data is processed
+    /// as if it came from a PTY read.
+    ///
+    /// Thread safety: This acquires the renderer mutex internally.
+    /// Call from a single thread (the SSH read thread).
+    export fn ghostty_surface_write_output(
+        surface: *Surface,
+        ptr: [*]const u8,
+        len: usize,
+    ) void {
+        surface.core_surface.io.processOutput(ptr[0..len]);
     }
 
     /// Returns true if the surface currently has mouse capturing
