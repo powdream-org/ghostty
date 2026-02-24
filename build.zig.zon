@@ -8,9 +8,9 @@
         // Zig libs
 
         .libxev = .{
-            // mitchellh/libxev
-            .url = "https://github.com/mitchellh/libxev/archive/7f803181b158a10fec8619f793e3b4df515566cb.tar.gz",
-            .hash = "libxev-0.0.0-86vtc2UaEwDfiTKX3iBI-s_hdzfzWQUarT3MUrmUQl-Q",
+            // powdream/libxev (fork with iOS machport fix)
+            .url = "https://github.com/powdream/libxev/archive/519b73e1a4c3821adbbfbe6323acbec2e13209be.tar.gz",
+            .hash = "libxev-0.0.0-86vtc2gaEwCpYClOHCg5KcBash60M8t00e8Uv0rBxlsv",
             .lazy = true,
         },
         .vaxis = .{
