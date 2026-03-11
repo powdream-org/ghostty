@@ -1,0 +1,123 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6:00 UTC (15:00 KST)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: [self-hosted, mac-mini]
+    env:
+      MISE_VERBOSE: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          UPSTREAM_URL="https://github.com/ghostty-org/ghostty.git"
+          if [ "$(git remote get-url upstream 2>/dev/null)" != "$UPSTREAM_URL" ]; then
+            git remote remove upstream 2>/dev/null || true
+            git remote add upstream "$UPSTREAM_URL"
+          fi
+          git fetch upstream main --tags --force
+
+      - name: Rebase onto upstream/main
+        id: rebase
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "main: already up to date."
+            exit 0
+          fi
+          if ! git rebase upstream/main; then
+            git rebase --abort
+            echo "::error::Rebase conflict with upstream ghostty-org/ghostty:main. Resolve manually and push."
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Set up zig
+        if: steps.rebase.outputs.changed == 'true'
+        run: |
+          echo "ZIG_GLOBAL_CACHE_DIR=$RUNNER_TOOL_CACHE/zig-cache" >> "$GITHUB_ENV"
+          ZIGVER=$(grep 'minimum_zig_version' build.zig.zon | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          mise use zig@${ZIGVER}
+          mise install
+
+      - name: Build lib-vt
+        if: steps.rebase.outputs.changed == 'true'
+        run: zig build lib-vt -Dsimd=false
+
+      - name: Build xcframework
+        if: steps.rebase.outputs.changed == 'true'
+        run: |
+          zig build \
+            -Demit-xcframework=true \
+            -Demit-macos-app=false \
+            -Doptimize=ReleaseFast
+
+      - name: Push main
+        if: steps.rebase.outputs.changed == 'true'
+        run: git push --force origin main
+
+      - name: Sync tags
+        run: |
+          set -euo pipefail
+
+          # Our custom commits on top of upstream/main (oldest first)
+          OUR_COMMITS=$(git log --format="%H" --reverse upstream/main..HEAD)
+          if [ -z "$OUR_COMMITS" ]; then
+            echo "No custom commits — skipping tag sync."
+            exit 0
+          fi
+
+          PROCESSED=0
+          MAX_NEW=10
+
+          while IFS= read -r TAG; do
+            [ "$PROCESSED" -ge "$MAX_NEW" ] && { echo "Reached max $MAX_NEW new tags per run."; break; }
+
+            PATCH_TAG="${TAG}-patch"
+            if git tag -l | grep -qxF "$PATCH_TAG"; then
+              echo "${PATCH_TAG} exists, skipping"
+              continue
+            fi
+
+            echo "Creating ${PATCH_TAG}..."
+            BRANCH="tmp-patch-${TAG//\//-}"
+            git checkout -b "$BRANCH" "$TAG"
+
+            if ! git cherry-pick $OUR_COMMITS; then
+              echo "::warning::Cherry-pick failed for ${PATCH_TAG}, skipping"
+              git cherry-pick --abort 2>/dev/null || true
+              git checkout main
+              git branch -D "$BRANCH"
+              continue
+            fi
+
+            git tag "$PATCH_TAG"
+            git push origin "$PATCH_TAG"
+            git checkout main
+            git branch -D "$BRANCH"
+            echo "Created ${PATCH_TAG}"
+            PROCESSED=$((PROCESSED + 1))
+
+          done < <(git tag -l 'v*' --sort=version:refname)
+
+          echo "Tag sync complete: ${PROCESSED} new patch tag(s) created."
