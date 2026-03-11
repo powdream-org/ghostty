@@ -31,7 +31,7 @@ jobs:
       - name: Fetch upstream
         run: |
           git remote add upstream https://github.com/ghostty-org/ghostty.git
-          git fetch upstream main --tags
+          git fetch upstream main --tags --force
 
       - name: Rebase onto upstream/main
         id: rebase
