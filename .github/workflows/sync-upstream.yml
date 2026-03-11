@@ -1,0 +1,89 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6:00 UTC (15:00 KST)
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.merge.outputs.changed }}
+      upstream_sha: ${{ steps.merge.outputs.upstream_sha }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/ghostty-org/ghostty.git
+          git fetch upstream main
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already up to date."
+            exit 0
+          fi
+
+          if git merge upstream/main --no-edit; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            echo "::error::Merge conflict with upstream ghostty-org/ghostty:main at ${UPSTREAM_SHA}. Resolve manually and push."
+            exit 1
+          fi
+
+      - name: Push
+        if: steps.merge.outputs.changed == 'true'
+        run: git push origin main
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: [self-hosted, mac-mini]
+    env:
+      MISE_VERBOSE: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Set up zig
+        run: |
+          echo "ZIG_GLOBAL_CACHE_DIR=$RUNNER_TOOL_CACHE/zig-cache" >> "$GITHUB_ENV"
+          ZIGVER=$(grep 'minimum_zig_version' build.zig.zon | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          mise use zig@${ZIGVER}
+          mise install
+
+      - name: Build lib-vt
+        run: zig build lib-vt -Dsimd=false
+
+      - name: Build xcframework
+        run: |
+          zig build \
+            -Demit-xcframework=true \
+            -Demit-macos-app=false \
+            -Doptimize=ReleaseFast
+
