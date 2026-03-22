@@ -62,7 +62,7 @@ jobs:
 
       - name: Build lib-vt
         if: steps.rebase.outputs.changed == 'true'
-        run: zig build lib-vt -Dsimd=false
+        run: zig build -Demit-lib-vt=true -Dsimd=false
 
       - name: Build xcframework
         if: steps.rebase.outputs.changed == 'true'
